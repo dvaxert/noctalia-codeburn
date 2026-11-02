@@ -3,6 +3,7 @@
 -- Commands arrive on "cmd" as "<nonce>|<refresh|period>|<payload>".
 
 local refreshing = false
+local queued = false
 local periodOverride = nil
 
 local function configuredPeriod()
@@ -29,6 +30,8 @@ local function binary()
 end
 
 local function publish(view)
+  -- A repeated error must still reach the watchers, so no two publishes encode the same.
+  view.at = noctalia.nowMs()
   local encoded = noctalia.json.encode(view)
   if encoded ~= nil then
     noctalia.state.set("view", encoded)
@@ -37,6 +40,7 @@ end
 
 local function refresh()
   if refreshing then
+    queued = true
     return
   end
   local bin = binary()
@@ -55,6 +59,12 @@ local function refresh()
     period,
   }, function(result)
     refreshing = false
+    -- The request that arrived mid-scan wins. This result may be for the old period.
+    if queued then
+      queued = false
+      refresh()
+      return
+    end
     if result.timedOut then
       publish({ ok = false, error = "timeout" })
       return
