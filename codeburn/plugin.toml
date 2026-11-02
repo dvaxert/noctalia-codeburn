@@ -2,12 +2,12 @@
 #
 # service -> runs `codeburn-rs status --format menubar-json`
 # bar     -> flame glyph and a cost, click opens the panel
-# panel   -> period, per-tool file counts, models and projects once priced
+# panel   -> period, cost, token chart, models, projects, and tools
 
 id = "dvaxert/codeburn"
 name = "CodeBurn"
-version = "0.1.0"
-plugin_api = 24
+version = "0.2.0"
+plugin_api = 29
 author = "dvaxert"
 license = "MIT"
 dependencies = ["codeburn-rs"]
@@ -59,8 +59,8 @@ entry = "bar.luau"
 [[panel]]
 id = "panel"
 entry = "panel.luau"
-width = 380
-height = 420
+width = 543
+height = 1200
 placement = "floating"
 position = "top_right"
 open_near_click = true

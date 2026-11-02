@@ -1,6 +1,6 @@
 # noctalia-codeburn
 
-Noctalia panel for [codeburn-rs](https://github.com/dvaxert/codeburn-rs). The service runs `codeburn-rs status --format menubar-json` and the bar shows today's figure once a provider reports `parsed: true`. Until then the bar shows an ellipsis and the panel lists files found on disk.
+Noctalia panel for [codeburn-rs](https://github.com/dvaxert/codeburn-rs). The service runs `codeburn-rs status --format menubar-json`. The bar shows the period cost. The panel shows that cost, a token chart, and the models, projects, and tools behind it.
 
 Point a path source at this repo and enable `dvaxert/codeburn`:
 
