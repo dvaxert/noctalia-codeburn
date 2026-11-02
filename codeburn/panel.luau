@@ -1,16 +1,32 @@
 --!nonstrict
--- Period totals, a token chart, and the models and projects behind them.
--- Limit meters sit in a column to the right of that stack.
+-- A header over two columns. The main column follows the selected period: the spend,
+-- a daily token chart, the models, and the projects. The side column has one card per
+-- tool, with that tool's period spend above its live limit meters.
 
 local PERIODS = { "today", "week", "30days", "month", "all" }
--- Five sm buttons measured at the body font. The column adds no padding of its own.
-local CONTENT_W = 361
--- Provider name, window, remaining percent, and the bar. 10px of card padding sits inside this.
-local LIMIT_W = 228
-local LIMIT_INNER = LIMIT_W - 20
-local COLUMN_GAP = 16
+local GAP = 12
+local CARD_PAD = 12
+-- Two list cards side by side make up the main column. The shell keeps 18px around the root.
+local LIST_W = 240
+local MAIN_W = LIST_W * 2 + GAP
+local SIDE_W = 236
+local ROOT_W = MAIN_W + GAP + SIDE_W
+local MAIN_INNER = MAIN_W - CARD_PAD * 2
+local LIST_INNER = LIST_W - CARD_PAD * 2
+local SIDE_INNER = SIDE_W - CARD_PAD * 2
+local CHART_H = 96
+local MAX_BAR_W = 18
+-- codeburn-rs lists at most eight models and projects. Holding that height keeps the cards still.
+local LIST_ROW_H = 30
+local LIST_ROWS = 8
+local LOW_REMAINING = 0.15
+local PROVIDER_COLOR = { claude = "primary", codex = "secondary", cursor = "tertiary" }
+local TRACK = "on_surface_variant/0.2"
 local view = nil
 local hoverIndex = nil
+-- Set from a click until the service answers, so the panel reacts before the scan ends.
+local pendingPeriod = nil
+local refreshing = false
 
 local function decode(value)
   if type(value) ~= "string" then
@@ -50,6 +66,38 @@ local function compact(n)
     return string.format("%.1fK", n / 1000)
   end
   return tostring(math.floor(n))
+end
+
+local function grouped(n)
+  local digits = tostring(math.floor(tonumber(n) or 0))
+  local spaced = digits:reverse():gsub("(%d%d%d)", "%1 "):reverse()
+  return (spaced:gsub("^ ", ""):gsub(" ", "\u{a0}"))
+end
+
+local function headlineMoney(cost)
+  cost = tonumber(cost) or 0
+  if math.abs(cost) >= 1000 then
+    return "$" .. grouped(cost)
+  end
+  return string.format("$%.2f", cost)
+end
+
+local function tokenTotal(item)
+  return (tonumber(item.inputTokens) or 0)
+    + (tonumber(item.outputTokens) or 0)
+    + (tonumber(item.cacheReadTokens) or 0)
+    + (tonumber(item.cacheWriteTokens) or 0)
+end
+
+local function shortDate(iso)
+  local month, day = tostring(iso):match("^%d+%-(%d+)%-(%d+)")
+  if month == nil then
+    return tostring(iso)
+  end
+  return noctalia.tr("date.short", {
+    day = tostring(tonumber(day)),
+    month = noctalia.tr("month." .. tostring(tonumber(month))),
+  })
 end
 
 local function errorText()
@@ -152,274 +200,381 @@ local function providerTitle(name)
   return name
 end
 
-local function meter(item)
-  local used = math.clamp(tonumber(item.used) or 0, 0, 1)
-  local remaining = 1 - used
-  local percent = tostring(math.floor(remaining * 100 + 0.5))
-  local children = {
-    ui.row({ width = LIMIT_INNER, align = "center", gap = 8 }, {
-      ui.label({ text = limitName(item), flexGrow = 1, maxLines = 1, fontSize = 13 }),
-      ui.label({
-        text = noctalia.tr("limit.remaining", { percent = percent }),
-        fontSize = 13,
-        color = "on_surface_variant",
-      }),
-    }),
-    ui.progress({
-      progress = remaining,
-      fill = remaining < 0.15 and "error" or "primary",
-      width = LIMIT_INNER,
-      height = 12,
-      radius = 6,
-    }),
-  }
-  local caption = resetCaption(item.resetsAt)
-  if caption ~= nil then
-    table.insert(children, ui.label({
-      text = caption,
-      color = "on_surface_variant",
-      fontSize = 12,
-      maxLines = 1,
-    }))
-  end
-  return ui.column({ gap = 2, width = LIMIT_INNER }, children)
+local function providerColor(name)
+  return PROVIDER_COLOR[name] or "on_surface_variant"
 end
 
-local function limitsColumn()
-  local rows = {
-    ui.label({ text = noctalia.tr("section.limits"), fontSize = 13, fontWeight = "bold" }),
-  }
-  if view == nil or view.ok ~= true then
-    table.insert(rows, ui.label({
-      text = noctalia.tr("status.waiting"),
-      color = "on_surface_variant",
-      width = LIMIT_W,
-      maxLines = 2,
-    }))
-    return ui.column({ width = LIMIT_W, gap = 8, align = "start" }, rows)
-  end
-  local limits = view.limits
-  if type(limits) ~= "table" or #limits == 0 then
-    table.insert(rows, ui.label({
-      text = noctalia.tr("limit.empty"),
-      color = "on_surface_variant",
-      width = LIMIT_W,
-      maxLines = 4,
-    }))
-    return ui.column({ width = LIMIT_W, gap = 8, align = "start" }, rows)
-  end
-  local previous = nil
-  for _, item in ipairs(limits) do
-    if type(item) == "table" then
-      local provider = tostring(item.provider or "")
-      if provider ~= previous then
-        previous = provider
-        table.insert(rows, ui.label({
-          text = providerTitle(provider),
-          fontSize = 13,
-          fontWeight = "bold",
-          color = "primary",
-        }))
-      end
-      table.insert(rows, meter(item))
+local function card(props, children)
+  props.fill = "surface_variant"
+  props.radius = 12
+  props.padding = CARD_PAD
+  return ui.column(props, children)
+end
+
+local function dot(color)
+  return ui.box({ width = 8, height = 8, radius = 4, fill = color })
+end
+
+local function caption(text)
+  return ui.label({ text = text, fontSize = 12, color = "on_surface_variant", maxLines = 1 })
+end
+
+local function cardTitle(text)
+  return ui.label({ text = text, fontSize = 13, fontWeight = "bold" })
+end
+
+local function stat(value, name)
+  return ui.column({ gap = 0, align = "end" }, {
+    ui.label({ text = value, fontSize = 15, fontWeight = "semibold" }),
+    caption(name),
+  })
+end
+
+local function heroRow(current)
+  return ui.row({ width = MAIN_INNER, align = "center", gap = 20 }, {
+    ui.column({ gap = 0, flexGrow = 1, align = "start" }, {
+      ui.label({ text = headlineMoney(current.cost), fontSize = 34, fontWeight = "bold" }),
+      caption(noctalia.tr("period." .. tostring(view.period or "today"))),
+    }),
+    stat(grouped(current.calls), noctalia.tr("stat.calls")),
+    stat(grouped(current.sessions), noctalia.tr("stat.sessions")),
+    stat(compact(tokenTotal(current)), noctalia.tr("stat.tokens")),
+  })
+end
+
+-- A stacked bar of each tool's part of the period spend, with its legend beneath.
+local function shareBlock(total)
+  local spending = {}
+  for _, provider in ipairs(view.providers or {}) do
+    if type(provider) == "table" and (tonumber(provider.cost) or 0) > 0 then
+      table.insert(spending, provider)
     end
   end
-  return ui.column({
-    width = LIMIT_W,
+  if #spending == 0 or total <= 0 then
+    return nil
+  end
+  local gaps = (#spending - 1) * 2
+  local segments = {}
+  local legend = {}
+  for _, provider in ipairs(spending) do
+    local name = tostring(provider.name or "")
+    local share = provider.cost / total
+    table.insert(segments, ui.box({
+      key = "share-" .. name,
+      width = math.max(3, (MAIN_INNER - gaps) * share),
+      height = 6,
+      radius = 3,
+      fill = providerColor(name),
+    }))
+    table.insert(legend, ui.row({ key = "legend-" .. name, gap = 6, align = "center" }, {
+      dot(providerColor(name)),
+      ui.label({ text = providerTitle(name), fontSize = 12 }),
+      caption(`{math.floor(share * 100 + 0.5)}%`),
+    }))
+  end
+  return ui.column({ gap = 6, width = MAIN_INNER, align = "start" }, {
+    ui.row({ gap = 2, width = MAIN_INNER, align = "center" }, segments),
+    ui.row({ gap = 14, align = "center" }, legend),
+  })
+end
+
+local function chartBlock()
+  local days = view.history and view.history.daily or {}
+  local n = #days
+  if n == 0 then
+    return caption(noctalia.tr("status.empty"))
+  end
+  local maxTokens = 1
+  local sumTokens = 0
+  for _, day in ipairs(days) do
+    local total = tokenTotal(day)
+    maxTokens = math.max(maxTokens, total)
+    sumTokens += total
+  end
+  local slot = MAIN_INNER / n
+  local inset = math.max(0.5, (slot - MAX_BAR_W) / 2)
+  local accent = hoverIndex or n
+  local bars = {}
+  for index, day in ipairs(days) do
+    local total = tokenTotal(day)
+    local fill = index == accent and "primary" or "primary/0.5"
+    if total <= 0 then
+      fill = TRACK
+    end
+    table.insert(bars, ui.column({
+      key = `day-{index}`,
+      width = slot,
+      height = CHART_H,
+      paddingH = inset,
+      justify = "end",
+      onHover = "onBarHover",
+    }, {
+      ui.box({
+        height = math.max(2, total / maxTokens * CHART_H),
+        radius = 2,
+        fill = fill,
+      }),
+    }))
+  end
+  local hovered = hoverIndex and days[hoverIndex]
+  local summary
+  if hovered then
+    summary = `{shortDate(hovered.date)}  ·  {compact(tokenTotal(hovered))}  ·  {money(hovered.cost)}`
+  else
+    summary = `{noctalia.tr("chart.days", { n = tostring(n) })}  ·  {compact(sumTokens)}`
+  end
+  return ui.column({ gap = 6, width = MAIN_INNER, align = "start" }, {
+    ui.row({ width = MAIN_INNER, align = "center" }, {
+      ui.label({ text = noctalia.tr("section.tokens"), fontSize = 13, fontWeight = "bold", flexGrow = 1 }),
+      ui.label({ text = summary, fontSize = 13, color = "on_surface_variant", maxLines = 1 }),
+    }),
+    ui.row({ width = MAIN_INNER, height = CHART_H, gap = 0, align = "end" }, bars),
+    ui.row({ width = MAIN_INNER, align = "center" }, {
+      ui.label({
+        text = shortDate(days[1].date),
+        fontSize = 12,
+        color = "on_surface_variant",
+        flexGrow = 1,
+      }),
+      caption(shortDate(days[n].date)),
+    }),
+  })
+end
+
+local function listCard(title, items, total)
+  local rows = { cardTitle(title) }
+  if #items == 0 then
+    table.insert(rows, caption(noctalia.tr("status.empty")))
+  end
+  for index, item in ipairs(items) do
+    local cost = tonumber(item.cost) or 0
+    table.insert(rows, ui.column({ key = `item-{index}`, gap = 3, width = LIST_INNER }, {
+      ui.row({ width = LIST_INNER, align = "center", gap = 8 }, {
+        ui.label({ text = tostring(item.name or ""), fontSize = 13, flexGrow = 1, maxLines = 1 }),
+        caption(compact(item.tokens)),
+        ui.label({ text = money(cost), fontSize = 13, fontWeight = "semibold" }),
+      }),
+      ui.progress({
+        progress = total > 0 and math.clamp(cost / total, 0, 1) or 0,
+        fill = "primary",
+        track = TRACK,
+        width = LIST_INNER,
+        height = 4,
+        radius = 2,
+      }),
+    }))
+  end
+  return card({
+    width = LIST_W,
     gap = 8,
     align = "start",
-    fill = "surface_variant",
-    radius = 10,
-    padding = 10,
+    minHeight = CARD_PAD * 2 + 26 + LIST_ROW_H * LIST_ROWS,
   }, rows)
 end
 
+local function meter(item, color)
+  local used = math.clamp(tonumber(item.used) or 0, 0, 1)
+  local remaining = 1 - used
+  local low = remaining < LOW_REMAINING
+  local percent = `{math.floor(remaining * 100 + 0.5)}%`
+  local head = {
+    ui.label({ text = limitName(item), fontSize = 13, flexGrow = 1, maxLines = 1 }),
+  }
+  if low then
+    table.insert(head, ui.glyph({ name = "alert-triangle", size = 14, color = "error" }))
+  end
+  table.insert(head, ui.label({
+    text = percent,
+    fontSize = 15,
+    fontWeight = "semibold",
+    color = low and "error" or "on_surface",
+  }))
+  local children = {
+    ui.row({ width = SIDE_INNER, align = "center", gap = 6 }, head),
+    ui.progress({
+      progress = remaining,
+      fill = low and "error" or color,
+      track = TRACK,
+      width = SIDE_INNER,
+      height = 8,
+      radius = 4,
+    }),
+  }
+  local resets = resetCaption(item.resetsAt)
+  if resets ~= nil then
+    table.insert(children, caption(resets))
+  end
+  return ui.column({ gap = 2, width = SIDE_INNER }, children)
+end
+
+local function providerCard(name, provider, limits)
+  local color = providerColor(name)
+  local head = {
+    dot(color),
+    ui.label({ text = providerTitle(name), fontSize = 14, fontWeight = "bold", flexGrow = 1, maxLines = 1 }),
+  }
+  local absent = provider ~= nil and provider.located ~= true
+  if absent then
+    table.insert(head, caption(noctalia.tr("provider.absent")))
+  elseif provider ~= nil then
+    table.insert(head, caption(compact(tokenTotal(provider))))
+    table.insert(head, ui.label({ text = money(provider.cost), fontSize = 13, fontWeight = "semibold" }))
+  end
+  local rows = { ui.row({ width = SIDE_INNER, align = "center", gap = 6 }, head) }
+  for index, item in ipairs(limits) do
+    table.insert(rows, ui.column({ key = `limit-{index}`, width = SIDE_INNER }, { meter(item, color) }))
+  end
+  if #limits == 0 and not absent then
+    table.insert(rows, caption(noctalia.tr("limit.empty")))
+  end
+  return card({ key = "provider-" .. name, width = SIDE_W, gap = 8, align = "start" }, rows)
+end
+
+local function sideColumn()
+  local order = {}
+  local providers = {}
+  local limitsBy = {}
+  for _, provider in ipairs(view.providers or {}) do
+    if type(provider) == "table" then
+      local name = tostring(provider.name or "")
+      table.insert(order, name)
+      providers[name] = provider
+      limitsBy[name] = {}
+    end
+  end
+  for _, item in ipairs(type(view.limits) == "table" and view.limits or {}) do
+    if type(item) == "table" then
+      local name = tostring(item.provider or "")
+      if limitsBy[name] == nil then
+        table.insert(order, name)
+        limitsBy[name] = {}
+      end
+      table.insert(limitsBy[name], item)
+    end
+  end
+  local rows = {
+    ui.row({ width = SIDE_W, align = "center", paddingH = CARD_PAD }, {
+      ui.label({ text = noctalia.tr("section.limits"), fontSize = 13, fontWeight = "bold", flexGrow = 1 }),
+      caption(noctalia.tr("limit.left")),
+    }),
+  }
+  for _, name in ipairs(order) do
+    table.insert(rows, providerCard(name, providers[name], limitsBy[name]))
+  end
+  return ui.column({ width = SIDE_W, gap = 8, align = "start" }, rows)
+end
+
 local function periodButtons()
-  local current = (view and view.period) or noctalia.getConfig("period") or "today"
+  local current = pendingPeriod or (view and view.period) or noctalia.getConfig("period") or "today"
   local buttons = {}
   for _, period in ipairs(PERIODS) do
     table.insert(buttons, ui.button({
       key = "period-" .. period,
       text = noctalia.tr("period." .. period),
+      fontSize = 13,
       controlSize = "sm",
       variant = period == current and "primary" or "ghost",
       onClick = function()
+        if period == current then
+          return
+        end
         hoverIndex = nil
+        pendingPeriod = period
+        render()
         send("period", period)
       end,
     }))
   end
-  return ui.row({ gap = 4, align = "center" }, buttons)
+  return ui.row({ gap = 2, align = "center", fill = "surface_variant", radius = 10, padding = 2 }, buttons)
 end
 
-local function row(name, value, dim)
-  return ui.row({ width = CONTENT_W, align = "center", gap = 8 }, {
-    ui.label({ text = name, flexGrow = 1, maxLines = 1 }),
-    ui.label({ text = value, color = dim and "on_surface_variant" or "on_surface" }),
-  })
-end
-
-local function section(title)
-  return ui.label({ text = title, fontSize = 13, fontWeight = "bold" })
-end
-
-local function dayTokens(day)
-  return (tonumber(day.inputTokens) or 0)
-    + (tonumber(day.outputTokens) or 0)
-    + (tonumber(day.cacheReadTokens) or 0)
-    + (tonumber(day.cacheWriteTokens) or 0)
-end
-
-local function chartBlock()
-  local history = view and view.history or {}
-  local days = history.daily or {}
-  if #days == 0 then
-    return ui.label({ text = noctalia.tr("status.empty"), color = "on_surface_variant" })
-  end
-  local maxTokens = 1
-  local values = {}
-  local sumTokens = 0
-  for _, day in ipairs(days) do
-    local total = dayTokens(day)
-    if total > maxTokens then
-      maxTokens = total
-    end
-    sumTokens += total
-  end
-  for _, day in ipairs(days) do
-    table.insert(values, dayTokens(day) / maxTokens)
-  end
-  local caption
-  local hovered = hoverIndex and days[hoverIndex]
-  if hovered then
-    caption = `{hovered.date}   {compact(dayTokens(hovered))}   {money(hovered.cost)}`
-  else
-    caption = `{history.label or ""}   {compact(sumTokens)}`
-  end
-  return ui.column({ gap = 4, align = "start" }, {
-    ui.row({ width = CONTENT_W, align = "center" }, {
-      ui.label({ text = noctalia.tr("section.tokens"), fontSize = 13, fontWeight = "bold", flexGrow = 1 }),
-      ui.label({ text = caption, color = "on_surface_variant", maxLines = 1 }),
-    }),
-    ui.graph({
-      values = values,
-      fillOpacity = 0.35,
-      color = "primary",
-      width = CONTENT_W,
-      height = 78,
-      onPointerMove = "onGraphMove",
-      onPointerLeave = "onGraphLeave",
+local function headerRow()
+  return ui.row({ width = ROOT_W, gap = 8, align = "center" }, {
+    ui.glyph({ name = "flame", size = 20, color = "primary" }),
+    ui.label({ text = noctalia.tr("title"), fontSize = 16, fontWeight = "bold", flexGrow = 1 }),
+    periodButtons(),
+    ui.button({
+      glyph = "refresh",
+      variant = "ghost",
+      controlSize = "sm",
+      enabled = not refreshing,
+      tooltip = noctalia.tr("tooltip.refresh"),
+      onClick = function()
+        refreshing = true
+        render()
+        send("refresh")
+      end,
     }),
   })
 end
 
-local function detailRows()
-  local rows = {}
+local function statusCard(glyph, text, color)
+  return ui.column({ width = ROOT_W, flexGrow = 1, gap = 10, align = "center", justify = "center" }, {
+    ui.glyph({ name = glyph, size = 32, color = color }),
+    ui.label({
+      text = text,
+      color = color,
+      maxWidth = MAIN_INNER,
+      maxLines = 6,
+      textAlign = "center",
+    }),
+  })
+end
+
+local function dashboard()
   local current = view.current or {}
-  table.insert(rows, section(noctalia.tr("section.models")))
-  local models = current.topModels or {}
-  if #models == 0 then
-    table.insert(rows, ui.label({ text = noctalia.tr("status.empty"), color = "on_surface_variant" }))
+  local total = tonumber(current.cost) or 0
+  local spend = { heroRow(current) }
+  local share = shareBlock(total)
+  if share ~= nil then
+    table.insert(spend, share)
   end
-  for _, model in ipairs(models) do
-    table.insert(rows, row(
-      tostring(model.name or ""),
-      `{money(model.cost)}  {compact(model.tokens)}`,
-      true
-    ))
-  end
-  table.insert(rows, section(noctalia.tr("section.projects")))
-  local projects = current.projects or {}
-  if #projects == 0 then
-    table.insert(rows, ui.label({ text = noctalia.tr("status.empty"), color = "on_surface_variant" }))
-  end
-  for _, project in ipairs(projects) do
-    table.insert(rows, row(
-      tostring(project.name or ""),
-      `{money(project.cost)}  {compact(project.tokens)}`,
-      true
-    ))
-  end
-  table.insert(rows, section(noctalia.tr("section.tools")))
-  for _, provider in ipairs(view.providers or {}) do
-    if type(provider) == "table" then
-      local name = noctalia.tr("provider." .. tostring(provider.name or ""))
-      local text
-      if provider.located ~= true then
-        text = noctalia.tr("provider.absent", { name = name })
-      else
-        text = `{name}   {money(provider.cost)}   {compact((provider.inputTokens or 0) + (provider.outputTokens or 0) + (provider.cacheReadTokens or 0) + (provider.cacheWriteTokens or 0))}`
-      end
-      table.insert(rows, ui.label({ text = text, color = "on_surface_variant", maxLines = 1 }))
-    end
-  end
-  return rows
+  table.insert(spend, chartBlock())
+  return ui.scroll({ flexGrow = 1 }, {
+    ui.row({
+      width = ROOT_W,
+      gap = GAP,
+      align = "stretch",
+      opacity = pendingPeriod and 0.55 or 1,
+    }, {
+      ui.column({ width = MAIN_W, gap = GAP, align = "start" }, {
+        card({ width = MAIN_W, gap = 14, align = "start" }, spend),
+        ui.row({ width = MAIN_W, gap = GAP, align = "stretch" }, {
+          listCard(noctalia.tr("section.models"), current.topModels or {}, total),
+          listCard(noctalia.tr("section.projects"), current.projects or {}, total),
+        }),
+      }),
+      sideColumn(),
+    }),
+  })
 end
 
-local function render()
+function render()
   local body
   if view == nil then
-    body = { ui.label({ text = noctalia.tr("status.waiting"), color = "on_surface_variant" }) }
+    body = statusCard("flame", noctalia.tr("status.waiting"), "on_surface_variant")
   elseif view.ok ~= true then
-    body = { ui.label({ text = errorText(), color = "error" }) }
+    body = statusCard("alert-triangle", errorText(), "error")
   else
-    local current = view.current or {}
-    local tokens = (tonumber(current.inputTokens) or 0)
-      + (tonumber(current.outputTokens) or 0)
-      + (tonumber(current.cacheReadTokens) or 0)
-      + (tonumber(current.cacheWriteTokens) or 0)
-    body = {
-      ui.label({ text = money(current.cost), fontSize = 28, fontWeight = "bold" }),
-      ui.label({
-        text = noctalia.tr("status.meta", {
-          calls = tostring(current.calls or 0),
-          sessions = tostring(current.sessions or 0),
-          tokens = compact(tokens),
-        }),
-        color = "on_surface_variant",
-      }),
-      chartBlock(),
-      ui.column({ gap = 4, align = "start" }, detailRows()),
-    }
+    body = dashboard()
   end
-  panel.render(ui.row({ gap = COLUMN_GAP, align = "start" }, {
-    ui.column({ width = CONTENT_W, gap = 8, align = "start", justify = "start" }, {
-      ui.row({ width = CONTENT_W, gap = 6, align = "center" }, {
-        ui.glyph({ name = "flame", size = 18, color = "primary" }),
-        ui.label({ text = noctalia.tr("title"), fontSize = 15, fontWeight = "bold", flexGrow = 1 }),
-        ui.button({
-          glyph = "refresh",
-          variant = "ghost",
-          controlSize = "sm",
-          tooltip = noctalia.tr("tooltip.refresh"),
-          onClick = function()
-            send("refresh")
-          end,
-        }),
-      }),
-      periodButtons(),
-      ui.separator({}),
-      ui.column({ gap = 8, align = "start" }, body),
-    }),
-    limitsColumn(),
+  panel.render(ui.column({ flexGrow = 1, gap = GAP }, {
+    headerRow(),
+    body,
   }))
 end
 
-function onGraphMove(x, _y)
-  local days = view and view.history and view.history.daily or {}
-  local n = #days
-  if n == 0 then
+function onBarHover(state, key)
+  local index = tonumber(tostring(key):match("^day%-(%d+)$"))
+  if index == nil then
     return
   end
-  local idx = math.clamp(math.floor((tonumber(x) or 0) * n) + 1, 1, n)
-  if hoverIndex ~= idx then
-    hoverIndex = idx
-    render()
-  end
-end
-
-function onGraphLeave()
-  if hoverIndex ~= nil then
+  if state == "true" then
+    if hoverIndex ~= index then
+      hoverIndex = index
+      render()
+    end
+  elseif hoverIndex == index then
     hoverIndex = nil
     render()
   end
@@ -428,6 +583,10 @@ end
 local function apply(value)
   view = decode(value)
   hoverIndex = nil
+  refreshing = false
+  if view == nil or view.ok ~= true or view.period == pendingPeriod then
+    pendingPeriod = nil
+  end
   render()
 end
 

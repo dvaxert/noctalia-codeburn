@@ -2,11 +2,11 @@
 #
 # service -> runs `codeburn-rs status --format menubar-json`
 # bar     -> flame glyph and a cost, click opens the panel
-# panel   -> spend on the left, remaining limit meters on the right
+# panel   -> period spend in the main column, one card per tool with limit meters beside it
 
 id = "dvaxert/codeburn"
 name = "CodeBurn"
-version = "0.2.0"
+version = "0.3.0"
 plugin_api = 29
 author = "dvaxert"
 license = "MIT"
@@ -59,11 +59,10 @@ entry = "bar.luau"
 [[panel]]
 id = "panel"
 entry = "panel.luau"
-# Inner row is the 361px spend column, a 16px gap, and the 228px meters.
-# The shell keeps 14px on each side of that row, so the card is 633 wide.
-# Height stays 1200: the spend column is still the tall side.
-width = 633
-height = 1200
+# Root is 740 wide (492 main, 12 gap, 236 side), and the shell keeps 18px on each side.
+# The height holds the eight-row lists; a shorter screen scrolls the body.
+width = 776
+height = 726
 placement = "floating"
 position = "top_right"
 open_near_click = true
