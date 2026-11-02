@@ -25,36 +25,32 @@
 
 ## Sixty seconds
 
-You need Noctalia 5.3 or newer and `codeburn-rs` on `PATH` or in `~/.cargo/bin`:
+On Arch and its derivatives, one script installs both `codeburn-rs` and the plugin as pacman packages, then enables the plugin:
 
 ```bash
-git clone https://github.com/dvaxert/codeburn-rs
-cargo install --path codeburn-rs --locked
 git clone https://github.com/dvaxert/noctalia-codeburn
+cd noctalia-codeburn
+./install.sh
 ```
 
-Point a path source at this repo and enable the plugin. In `~/.local/state/noctalia/settings.toml`:
+It asks for sudo once. You can delete both checkouts afterwards: the binary lands in `/usr/bin` and the plugin in `/usr/share/noctalia-codeburn`.
 
-```toml
-[plugins]
-enabled = ["dvaxert/codeburn"]
+Then add the `dvaxert/codeburn:bar` widget in Noctalia's bar settings and click the flame.
 
-[[plugins.source]]
-kind = "path"
-location = "/path/to/noctalia-codeburn"
-name = "codeburn"
-```
+| Command | What it does |
+|---|---|
+| `./install.sh` | Installs both, or updates them from this checkout |
+| `./install.sh --plugin-only` | Installs the plugin. `codeburn-rs` must already be installed |
+| `./install.sh --cli-only` | Installs `codeburn-rs` |
+| `./install.sh --uninstall` | Disables the plugin and removes both packages |
 
-Add the widget to a bar:
+Noctalia's plugin sources are per user, which is why a bare `pacman -U` is not enough. The package prints the two commands it needs.
 
-```toml
-"dvaxert/codeburn:bar"
-```
-
-Then reload and click the flame:
+**Other distros:** you need Noctalia 5.3 or newer. Install [codeburn-rs](https://github.com/dvaxert/codeburn-rs) with `cargo`, then point a source at a copy of this repo that you keep around:
 
 ```bash
-noctalia msg config-reload
+noctalia msg plugins source add codeburn path /path/to/noctalia-codeburn
+noctalia msg plugins enable dvaxert/codeburn
 ```
 
 ## What you see
@@ -96,14 +92,21 @@ The run times out after 60 seconds. The period buttons send `today`, `week`, `30
 
 ## Development
 
-`panel.luau` reloads on save. Changes to `plugin.toml` and `translations/` show up after the plugin is cycled:
+To work on the plugin, point the source at your checkout instead of the installed package:
+
+```bash
+noctalia msg plugins source remove codeburn
+noctalia msg plugins source add codeburn path "$PWD"
+```
+
+`panel.luau` then reloads on save. Changes to `plugin.toml` and `translations/` show up after the plugin is cycled. Do the same after `git switch` or `git pull`, because a reload can catch the old file mid-checkout:
 
 ```bash
 noctalia msg plugins disable dvaxert/codeburn
 noctalia msg plugins enable dvaxert/codeburn
 ```
 
-Check the manifest offline with `noctalia plugins lint codeburn`.
+Check the manifest offline with `noctalia plugins lint codeburn`. Running `./install.sh` afterwards puts the source back on the package.
 
 ## License
 

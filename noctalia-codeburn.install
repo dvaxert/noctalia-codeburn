@@ -1,0 +1,16 @@
+post_install() {
+  cat <<'MSG'
+Noctalia sources are per user. Enable the plugin as your own user:
+  noctalia msg plugins source add codeburn path /usr/share/noctalia-codeburn
+  noctalia msg plugins enable dvaxert/codeburn
+./install.sh does this for you.
+MSG
+}
+
+pre_remove() {
+  cat <<'MSG'
+Disable the plugin as your own user:
+  noctalia msg plugins disable dvaxert/codeburn
+  noctalia msg plugins source remove codeburn
+MSG
+}
