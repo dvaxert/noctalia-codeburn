@@ -1,0 +1,66 @@
+# CodeBurn: today's AI coding spend in the Noctalia panel.
+#
+# service -> runs `codeburn-rs status --format menubar-json`
+# bar     -> flame glyph and a cost, click opens the panel
+# panel   -> period, per-tool file counts, models and projects once priced
+
+id = "dvaxert/codeburn"
+name = "CodeBurn"
+version = "0.1.0"
+plugin_api = 24
+author = "dvaxert"
+license = "MIT"
+dependencies = ["codeburn-rs"]
+tags = ["ai", "spend"]
+icon = "flame"
+description = "Claude, Codex, and Cursor spend from codeburn-rs."
+
+[[setting]]
+key = "binary"
+type = "string"
+label_key = "settings.binary.label"
+description_key = "settings.binary.description"
+default = ""
+
+[[setting]]
+key = "period"
+type = "select"
+label_key = "settings.period.label"
+description_key = "settings.period.description"
+default = "today"
+options = [
+  { value = "today", label_key = "period.today" },
+  { value = "week", label_key = "period.week" },
+  { value = "30days", label_key = "period.30days" },
+  { value = "month", label_key = "period.month" },
+  { value = "all", label_key = "period.all" },
+]
+
+[[setting]]
+key = "refresh_sec"
+type = "int"
+label_key = "settings.refresh_sec.label"
+description_key = "settings.refresh_sec.description"
+default = 60
+min = 15
+max = 3600
+
+[[service]]
+id = "service"
+entry = "service.luau"
+
+[[widget]]
+id = "bar"
+entry = "bar.luau"
+
+  [widget.actions]
+  middle = "none"
+
+[[panel]]
+id = "panel"
+entry = "panel.luau"
+width = 380
+height = 420
+placement = "floating"
+position = "top_right"
+open_near_click = true
