@@ -1,16 +1,20 @@
-# noctalia-codeburn
+<p align="center"><strong>Today's Claude, Codex, and Cursor spend, in the Noctalia panel.</strong></p>
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Noctalia plugin API 29](https://img.shields.io/badge/noctalia-plugin%20api%2029-7c5cff.svg)](https://github.com/noctalia-dev/noctalia-shell)
-[![codeburn-rs](https://img.shields.io/badge/needs-codeburn--rs-111111.svg)](https://github.com/dvaxert/codeburn-rs)
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-F97316.svg" alt="MIT license" /></a>
+  <a href="https://github.com/noctalia-dev/noctalia-shell"><img src="https://img.shields.io/badge/noctalia-plugin%20api%2029-F97316.svg" alt="Noctalia plugin API 29" /></a>
+  <a href="https://github.com/dvaxert/codeburn-rs"><img src="https://img.shields.io/badge/needs-codeburn--rs-F97316.svg" alt="Needs codeburn-rs" /></a>
+</p>
 
-Панель Noctalia для [codeburn-rs](https://github.com/dvaxert/codeburn-rs). На баре — огонёк и расход выбранного периода. В панели слева тот же расход, график токенов, модели, проекты и инструменты. Справа карточка лимитов: полоса заполнена тем, что ещё осталось, рядом процент и время сброса.
+<p align="center"><code>dvaxert/codeburn:bar</code></p>
 
-Нужны Noctalia 5.3 (plugin API 29) и бинарь `codeburn-rs` в `PATH` или в `~/.cargo/bin`.
+<p align="center"><sub>Needs <a href="https://github.com/dvaxert/codeburn-rs">codeburn-rs</a> on <code>PATH</code> or in <code>~/.cargo/bin</code>, and Noctalia 5.3.</sub></p>
 
-## Поставить
+The bar shows a flame and the cost of the selected period. The panel puts that spend on the left — the total, a token chart, the models, the projects, and the tools — and the remaining limits on the right. A full bar means the window is almost untouched. The percent beside it is what is left.
 
-Репозиторий подключается как path-источник. В `~/.local/state/noctalia/settings.toml`:
+## Sixty seconds
+
+Point a path source at this repo and enable the plugin. In `~/.local/state/noctalia/settings.toml`:
 
 ```toml
 [plugins]
@@ -18,45 +22,55 @@ enabled = ["dvaxert/codeburn"]
 
 [[plugins.source]]
 kind = "path"
-location = "/путь/к/noctalia-codeburn"
+location = "/path/to/noctalia-codeburn"
 name = "codeburn"
 ```
 
-На бар, в конец или в другое место, добавляется виджет:
+Add the widget to a bar:
 
 ```toml
 "dvaxert/codeburn:bar"
 ```
 
-Дальше `noctalia msg config-reload`. Клик по огоньку открывает панель. Правки `panel.luau` подхватываются сразу. Смена `plugin.toml` и файлов в `translations/` видна после выключения и включения плагина:
+Then reload:
+
+```bash
+noctalia msg config-reload
+```
+
+Click the flame. The service runs:
+
+```bash
+codeburn-rs status --format menubar-json --period <period>
+```
+
+and publishes the JSON on the `view` state key. The run times out after 60 seconds. While the first scan is still going, the bar shows `—`.
+
+`panel.luau` reloads on save. Changes to `plugin.toml` and `translations/` show up after the plugin is cycled:
 
 ```bash
 noctalia msg plugins disable dvaxert/codeburn
 noctalia msg plugins enable dvaxert/codeburn
 ```
 
-Проверка манифеста без сети: `noctalia plugins lint codeburn`.
+Check the manifest offline with `noctalia plugins lint codeburn`.
 
-## Что на экране
+## What you see
 
-Кнопки периода шлют в сервис `today`, `week`, `30days`, `month` или `all`. Сервис запускает:
+The period buttons send `today`, `week`, `30days`, `month`, or `all`. The left column follows that period. The right column does not: `limits` is always the live windows, labeled by provider and by kind, with a reset line under each bar.
 
-```bash
-codeburn-rs status --format menubar-json --period <период>
-```
+If a provider does not answer, its bars are absent. If none answer, the card says the limits could not be read. The spend on the left still renders.
 
-и кладёт JSON в состояние `view`. Таймаут запуска — 60 секунд. Пока файлы читаются в первый раз, на баре стоит «—».
+## Settings
 
-Полоса лимита показывает остаток: полная полоса значит, что окно почти не тронуто. Подпись «73% осталось» и строка сброса берутся из `limits` в том же JSON. Если сервис не ответил, карточка пишет, что лимиты не прочитались, а расход слева остаётся.
-
-## Настройки
-
-| Ключ | По умолчанию | Зачем |
+| Key | Default | What it does |
 |---|---|---|
-| `binary` | пусто | путь к `codeburn-rs`. Пусто: сначала `PATH`, потом `~/.cargo/bin/codeburn-rs` |
-| `period` | `today` | окно при старте сервиса. Панель может сменить его, пока настройки не трогали |
-| `refresh_sec` | 60 | как часто сервис снова запускает бинарь, от 15 до 3600 |
+| `binary` | empty | Path to `codeburn-rs`. Empty tries `PATH`, then `~/.cargo/bin/codeburn-rs` |
+| `period` | `today` | Window requested when the service starts. The panel can switch it until settings change |
+| `refresh_sec` | `60` | How often the service runs the binary, from 15 to 3600 |
 
-## Лицензия
+## License
 
-[MIT](LICENSE) © 2026 dvaxert
+[MIT](LICENSE).
+
+The numbers come from [codeburn-rs](https://github.com/dvaxert/codeburn-rs).
